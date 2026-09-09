@@ -86,7 +86,7 @@ CONFIG = {
     # @tmomail.net, @vtext.com) are shut down or shutting down, so real SMS goes
     # through Twilio.
     "notify": {
-        "methods": ["ntfy", "sms"],   # any of: ntfy, sms, email, stdout
+        "methods": ["ntfy"],   # any of: ntfy, sms, email, stdout
 
         "ntfy_topic": os.environ.get("NTFY_TOPIC", "jet-tesla-CHANGEME"),
         "ntfy_server": "https://ntfy.sh",
