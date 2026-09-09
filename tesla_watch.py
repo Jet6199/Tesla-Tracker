@@ -87,7 +87,7 @@ CONFIG = {
     # @tmomail.net, @vtext.com) are shut down or shutting down, so real SMS goes
     # through Twilio.
     "notify": {
-        "methods": ["ntfy"],   # any of: ntfy, sms, email, stdout
+        "methods": ["ntfy", "sms"],   # any of: ntfy, sms, email, stdout
 
         "ntfy_topic": os.environ.get("NTFY_TOPIC", "jet-tesla-CHANGEME"),
         "ntfy_server": "https://ntfy.sh",
@@ -109,6 +109,9 @@ CONFIG = {
     # --- Runtime ----------------------------------------------------------
     "state_file": "tesla_state.json",
     "timeout": 20,
+    # Set by the "debug" checkbox on a manual run. Prints everything Tesla
+    # returned, then exits without saving state or sending notifications.
+    "dry_run": os.environ.get("DRY_RUN", "").lower() == "true",
     "notify_on_first_run": True,    # sends a snapshot on run #1 so you can confirm
                                     # setup worked. Set to False after that.
 }
@@ -442,6 +445,35 @@ def passes_filters(vehicle, filters):
     return True
 
 
+def report_inventory(cars, matches, cfg):
+    """Always log enough to tell 'nothing new' apart from 'matching nothing'."""
+    mode = "early-pickup query" if cfg["inventory_query_raw"] else "fallback query"
+    log(f"Inventory: {mode} returned {len(cars)} vehicles, {len(matches)} passed filters.")
+    log(f"Filters: {cfg['inventory_filters']}")
+
+    if not cars:
+        log("Tesla returned nothing at all. The query itself may be malformed.")
+        return
+
+    sample = cars if cfg["dry_run"] else cars[:5]
+    label = "ALL VEHICLES RETURNED" if cfg["dry_run"] else "Sample of raw values"
+    log(f"--- {label} ---")
+    for car in sample:
+        vehicle = summarize_vehicle(car)
+        verdict = "MATCH" if passes_filters(vehicle, cfg["inventory_filters"]) else "no"
+        log(
+            f"  [{verdict}] {vehicle['vin']} | trim={vehicle['trim']!r} | "
+            f"interior={vehicle['interior']!r} | paint={vehicle['paint']!r} | "
+            f"price={vehicle['price']!r} | {vehicle['city']}, {vehicle['state']}"
+        )
+    if not cfg["dry_run"] and len(cars) > 5:
+        log(f"  ... {len(cars) - 5} more. Re-run with the debug box ticked to see all.")
+
+    if cars and not matches:
+        log("Nothing passed. Compare the trim/interior values above against your "
+            "filters; if Tesla renamed them, loosen the filter and re-run.")
+
+
 def collect_inventory(cfg, token=None):
     cars = fetch_inventory(cfg, token=token)
     matches = {}
@@ -449,6 +481,7 @@ def collect_inventory(cfg, token=None):
         vehicle = summarize_vehicle(car)
         if vehicle["vin"] and passes_filters(vehicle, cfg["inventory_filters"]):
             matches[vehicle["vin"]] = vehicle
+    report_inventory(cars, matches, cfg)
     return matches
 
 
@@ -630,6 +663,11 @@ def main():
         state["inventory"] = inventory
     except requests.RequestException as exc:
         log(f"Inventory check failed: {exc}")
+
+    if cfg["dry_run"]:
+        log("DRY RUN: state not saved, no notifications sent.")
+        log(f"Would have reported {len(sections)} section(s).")
+        return
 
     state["last_run"] = datetime.now(timezone.utc).isoformat()
     save_state(cfg["state_file"], state)
