@@ -3,7 +3,7 @@ name: Tesla Watch
 on:
   # Every 15 minutes, offset from the quarter-hour marks. GitHub queues
   # scheduled workflows globally and the round numbers are the most congested
-  # slots, so an odd offset measurably reduces how late runs start.
+  # slots, so an odd offset reduces how late runs start.
   schedule:
     - cron: "3,18,33,48 * * * *"
   workflow_dispatch:
@@ -12,34 +12,28 @@ concurrency:
   group: tesla-watch
   cancel-in-progress: false
 
+# Needed so the job can commit the updated state file back to the repo.
+permissions:
+  contents: write
+
 jobs:
   watch:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
+      # Action versions below are the Node 24 majors. Node 20 is removed from
+      # GitHub runners on 2026-09-16, after which older majors stop working.
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install dependencies
         run: pip install --quiet requests
-
-      # State lives in the Actions cache rather than in a commit, so the repo
-      # can be public (for unmetered minutes) without publishing your VIN.
-      # Cache entries are immutable: each run saves a unique key and restores
-      # the most recent one by prefix.
-      - name: Restore state
-        uses: actions/cache/restore@v4
-        with:
-          path: tesla_state.json
-          key: tesla-state-${{ github.run_id }}
-          restore-keys: |
-            tesla-state-
 
       - name: Run watcher
         env:
@@ -52,9 +46,21 @@ jobs:
           TWILIO_TO: ${{ secrets.TWILIO_TO }}
         run: python tesla_watch.py
 
-      - name: Save state
+      # State is committed rather than cached. Caching state is unreliable
+      # because cache entries are immutable and evictable; a commit always
+      # persists. Order details are stored as digests, so nothing personal is
+      # published. Inventory entries are public listings either way.
+      - name: Commit state if changed
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: tesla_state.json
-          key: tesla-state-${{ github.run_id }}
+        run: |
+          if [[ -z "$(git status --porcelain tesla_state.json)" ]]; then
+            echo "No state change."
+            exit 0
+          fi
+          git config user.name "tesla-watch-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tesla_state.json
+          git commit -m "state: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          # Another run may have pushed while this one was working.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
