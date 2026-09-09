@@ -108,7 +108,7 @@ CONFIG = {
     # --- Runtime ----------------------------------------------------------
     "state_file": "tesla_state.json",
     "timeout": 20,
-    "notify_on_first_run": False,   # True = send a baseline snapshot
+    "notify_on_first_run": True,   # True = send a baseline snapshot
 }
 
 # Order fields worth watching. Dotted paths are resolved safely; a missing path
