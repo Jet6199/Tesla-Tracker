@@ -13,6 +13,7 @@ tesla.com inventory page call). They can change without notice; the extractors
 below are written defensively so a schema change degrades instead of crashing.
 """
 
+import hashlib
 import json
 import os
 import smtplib
@@ -108,7 +109,8 @@ CONFIG = {
     # --- Runtime ----------------------------------------------------------
     "state_file": "tesla_state.json",
     "timeout": 20,
-    "notify_on_first_run": True,   # True = send a baseline snapshot
+    "notify_on_first_run": True,    # sends a snapshot on run #1 so you can confirm
+                                    # setup worked. Set to False after that.
 }
 
 # Order fields worth watching. Dotted paths are resolved safely; a missing path
@@ -169,6 +171,20 @@ def dig(obj, path, default=None):
         if cur is None:
             return default
     return cur
+
+
+def hash_value(value):
+    """Short digest used for change detection without storing the value itself.
+
+    Order details (VIN, delivery appointment and address, amount due) are
+    personal, and the state file is committed to a public repo. Storing digests
+    means the file can detect that something changed without publishing what.
+    """
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
+
+
+def hash_summary(summary):
+    return {label: hash_value(value) for label, value in (summary or {}).items()}
 
 
 def log(msg):
@@ -452,14 +468,19 @@ def save_state(path, state):
         json.dump(state, fh, indent=2, sort_keys=True)
 
 
-def diff_order(old, new):
+def diff_order(old_hashes, new_summary):
+    """old_hashes maps label -> digest. new_summary maps label -> live value.
+
+    Only the new value is shown, since the previous one was never stored.
+    """
     changes = []
-    for key, value in (new or {}).items():
-        previous = (old or {}).get(key)
+    for label, value in (new_summary or {}).items():
+        previous = (old_hashes or {}).get(label)
+        current = hash_value(value)
         if previous is None:
-            changes.append(f"{key}: {value}")
-        elif previous != value:
-            changes.append(f"{key}: {previous} -> {value}")
+            changes.append(f"{label}: {value}")
+        elif previous != current:
+            changes.append(f"{label}: now {value}")
     return changes
 
 
@@ -553,7 +574,7 @@ def format_vehicle(vehicle):
 def main():
     cfg = CONFIG
     state = load_state(cfg["state_file"])
-    first_run = not state.get("order") and not state.get("inventory")
+    first_run = not state.get("order_hashes") and not state.get("inventory")
     sections = []      # full detail, for ntfy/email
     headlines = []     # terse, for SMS
     token = None
@@ -564,14 +585,14 @@ def main():
         if token:
             order = collect_order(token, cfg)
             if order:
-                changes = diff_order(state.get("order"), order)
+                changes = diff_order(state.get("order_hashes"), order)
                 if changes:
                     sections.append("ORDER UPDATE\n" + "\n".join(changes))
                     headlines.append(
                         "Order: " + ("; ".join(changes) if len(changes) <= 2
                                      else f"{len(changes)} updates")
                     )
-                state["order"] = order
+                state["order_hashes"] = hash_summary(order)
         else:
             log("No refresh token set; skipping order tracking.")
     except requests.HTTPError as exc:
